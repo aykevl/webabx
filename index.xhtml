@@ -1,0 +1,253 @@
+<!DOCTYPE html>
+
+<html xmlns="http://www.w3.org/1999/xhtml">
+	<head>
+		<title>Web ABX tester</title>
+		<meta charset="utf-8"/>
+		<script src="spinner.js" type="text/javascript" defer=""></script>
+		<script src="log.js"     type="text/javascript" defer=""></script>
+		<script src="abx.js"     type="text/javascript" defer=""></script>
+		<script src="script.js"  type="text/javascript" defer=""></script>
+		<link rel="stylesheet" href="style.css"/>
+		<meta name="viewport" content="width=device-width"/>
+	</head>
+<body>
+
+<h1>Web ABX tester</h1>
+
+<div style="overflow: auto;">
+	<div class="tabs">
+		<div class="tabheaders">
+			Choose sample:
+			<span class="nobreak">
+				<span class="tabheader open">By samples</span>
+				<span class="tabheader">By file input</span>
+			</span>
+		</div>
+		<div class="tabbody open" id="select-sample">
+			<fieldset class="inline">
+				<legend>Sample</legend>
+				<select id="sample-name" onchange="abx.onSampleNameChange()"/>
+			</fieldset>
+			<fieldset class="inline">
+				<legend>Codec</legend>
+				<select id="sample-codec" onchange="abx.onSampleCodecChange()"/>
+			</fieldset>
+			<fieldset class="inline">
+				<legend>Bitrate</legend>
+				<select id="sample-bitrate" onchange="abx.onSampleBitrateChange()"/>
+			</fieldset>
+		</div>
+		<div class="tabbody">
+			<input id="fileinput" type="file" multiple="" onchange="abx.loadFiles();"/>
+			<!-- second input, in case only one can be selected (like on mobile devices) -->
+			<input id="fileinput2" type="file" onchange="abx.loadFiles();" style="display: none"/>
+		</div>
+	</div>
+</div>
+
+<div class="mediabuttons">
+	<div class="fourbuttons">
+		<button id="button-a" onclick="abx.changeSource('a');" class="a">Play <u>A</u></button>
+		<button id="button-b" onclick="abx.changeSource('b');" class="b">Play <u>B</u></button><br/>
+
+		<button id="button-x" onclick="abx.changeSource('x');">Play <u>X</u></button>
+		<button id="button-y" onclick="abx.changeSource('y');">Play <u>Y</u></button><br />
+
+		<button id="button-axby" onclick="setGuess('a', 'b');" title="X=A, Y=B">⇊</button>
+		<button id="button-aybx" onclick="setGuess('b', 'a');" title="X=B, Y=A">⤩</button><br/>
+
+		<button id="button-ok" onclick="abx.nextRound();" title="Enter">Ok</button>
+	</div>
+	<div class="buttonboxtwo">
+		<button id="button-pause" onclick="abx.pause();" title="Spacebar">Play/pause</button>
+		<button id="button-stop"  onclick="abx.stop();" title="Esc">Stop</button><br />
+
+		<label>
+			<input type="checkbox" id="keep-pos-track" checked="" onchange="document.querySelector('#keep-pos-round').disabled = !this.checked;"/>
+			Keep position on track change
+		</label><br/>
+
+		<label>
+			<input type="checkbox" id="keep-pos-round"/>
+			Keep position in next round
+		</label><br/>
+
+		<label title="Start immediately in next round">
+			<input type="checkbox" id="autocontinue"/>
+			Autocontinue
+		</label><br/>
+
+		<label title="Repeat">
+			<input type="checkbox" id="repeat"/>
+			Repeat
+		</label>
+	</div>
+</div>
+
+<div id="progressbar">
+	<canvas class="waveform"/>
+	<div class="progressfill"/>
+	<span class="progresstext"/>
+</div>
+
+<div class="mediabuttons" id="offset-buttons">
+	<button id="button-startOffset" onclick="setStartOffset();" style="float: left;"><u>S</u>tart offset</button>
+	<button id="button-endOffset" onclick="setEndOffset();" style="float: right;"><u>E</u>nd offset</button>
+	<button id="button-startOffset-reset" onclick="resetStartOffset();" style="float: left;">Reset</button>
+	<button id="button-endOffset-reset" onclick="resetEndOffset();" style="float: right;">Reset</button>
+</div>
+
+<table>
+	<tr> <th>Status:</th> <td><span id="status">...</span></td> </tr>
+	<tr> <th>Score: </th> <td><span id="score">...</span></td> </tr>
+	<tr> <th>Probability of guessing: </th> <td><span id="guessing-probability">...</span></td> </tr>
+</table>
+
+<script type="text/javascript">
+'use strict';
+//<![CDATA[
+
+var log;
+var abx;
+
+window.addEventListener('load', function () {
+	log = new Log();
+	abx = new Abx();
+
+	mediaButtonsSetDisabled(true);
+	var debug = document.location.href.substr(-5) == 'debug';
+	if (debug) {
+		document.querySelector('#fileinput').disabled = true;
+		abx.init();
+		abx.sources.a.url = "../enter.q20.sample.wav";
+		abx.sources.a.fullname = abx.sources.a.url;
+		abx.sources.b.url = "../enter.q10.sample.wav";
+		abx.sources.b.fullname = abx.sources.b.url;
+		abx.load();
+	}
+	abx.sources.a.url = getParameterByName('a');
+	abx.sources.b.url = getParameterByName('b');
+	if (abx.sources.a.url && abx.sources.b.url) {
+		abx.sources.a.fullname = abx.sources.a.url;
+		abx.sources.b.fullname = abx.sources.b.url;
+		abx.load();
+	}
+
+	abx.loadSampleIndex('samples/index.json', 'samples/', document.querySelector('#select-sample'));
+});
+
+// copied from http://stackoverflow.com/questions/901115/how-can-i-get-query-string-values
+function getParameterByName(name)
+{
+	name = name.replace(/[\[]/, "\\\[").replace(/[\]]/, "\\\]");
+	var regexS = "[\\?&]" + name + "=([^&#]*)";
+	var regex = new RegExp(regexS);
+	var results = regex.exec(window.location.search);
+	if(results == null)
+		return "";
+	else
+		return decodeURIComponent(results[1].replace(/\+/g, " "));
+}
+
+function loadTabs(tabs) {
+	var headers = tabs.querySelectorAll(':scope > .tabheaders .tabheader');
+	var bodies = tabs.querySelectorAll(':scope > .tabbody');
+	var selected = 0;
+	for (var i=0; i<headers.length; i++) {
+		console.log(headers[i]);
+		(function (index) {
+			headers[index].onclick = function (e) {
+				if (selected == index) return;
+				headers[index].classList.add('open');
+				headers[selected].classList.remove('open');
+				bodies[index].classList.add('open');
+				bodies[selected].classList.remove('open');
+				selected = index;
+			};
+		})(i);
+	}
+}
+
+document.addEventListener('DOMContentLoaded', function () {
+	var alltabs = document.querySelectorAll('.tabs');
+	for (var i=0; i<alltabs.length; i++) {
+		loadTabs(alltabs[i]);
+	}
+});
+
+// ]]>
+</script>
+
+<details open="">
+<summary>Log</summary>
+<textarea id="log" disabled="" rows="24" wrap="off"></textarea>
+</details>
+
+<details>
+<summary>About</summary>
+<p>This is a web-based ABX blind-testing tool. I think it's safe to say it's the first online ABX testing tool that doesn't rely on browser plugins.</p>
+<p><strong>Warning:</strong> this tool uses a lot memory to load the files. The audio data of both tracks is loaded completely into memory as raw PCM audio. This uses a few hundred MBs for a moderate song.</p>
+<p>This web application uses the new <a href="http://www.w3.org/TR/webaudio/">Web Audio API</a>. As of Febuary 2015, Chrome and Firefox work, Safari is not tested. See <a href="#support">Support</a> below for more information.</p>
+<p>I made it because I wasn't satisfied with the <a href="http://www.foobar2000.org/components/view/foo_abx">ABX tester</a> that came with <a href="http://www.foobar2000.org/">Foobaar2000</a>. It makes cliking noise when changing tracks and has a small but (to me) irritating gap. So I made my own. The way I prevented the same issues in the Web Audio API was by playing both streams at the same time and muting one of them. When changing track, one is muted and the other is unmuted. That way, no clicking or gap is audible (to me), thus making testing easier. And I added a few of my own features (auto continue, full keyboard support). In my opinion, it is better than the standard ABX Comparator of Foobar2000.</p>
+<h2>Keyboard shortcuts</h2>
+<dl>
+	<dt><span class="key">a</span> <span class="key">b</span> <span class="key">x</span> <span class="key">y</span></dt>
+	<dd>Play that track</dd>
+
+	<dt><span class="key">A</span> <span class="key">B</span></dt>
+	<dd>Guess which of the two the currently playing track (X or Y) is.</dd>
+
+	<dt><span class="key">Space</span></dt>
+	<dd>Play/pause</dd>
+
+	<dt><span class="key">Escape</span></dt>
+	<dd>Stop</dd>
+
+	<dt><span class="key">Enter</span></dt>
+	<dd>Ok - do the guess</dd>
+
+	<dt><span class="key">s</span> <span class="key">e</span></dt>
+	<dd>Set start or end position.</dd>
+
+	<dt><span class="key">S</span> <span class="key">E</span></dt>
+	<dd>Reset start or end to the beginning or end of the track, respectively.</dd>
+</dl>
+
+
+<h2><a id="support"/>Support</h2>
+<p>As of April 2015, Chrome and Firefox are supported (see <a href="http://caniuse.com/audio-api">caniuse.com</a> for up-to-date information). Safari is untested and will probably not work because the feature is still behind a prefix.</p>
+<p>Audio codec support varies greatly (per browser and OS). A list of supported codecs in this browser (may not include all supported codecs):</p>
+<table>
+    <tr><th>MP3: </th><td class="codec" data-codec="audio/mpeg; codecs=mp3">...</td></tr>
+    <tr><th>AAC: </th><td class="codec" data-codec="audio/mp4; codecs=mp4a">...</td></tr>
+    <tr><th>WAV: </th><td class="codec" data-codec="audio/wav; codecs=1">...</td></tr>
+    <tr><th>FLAC:</th><td class="codec" data-codec="audio/flac">...</td></tr>
+    <tr><th>OGG: </th><td class="codec" data-codec='audio/ogg; codecs=vorbis'>...</td></tr>
+    <tr><th>Opus:</th><td class="codec" data-codec="audio/ogg; codecs=opus">...</td></tr>
+</table>
+<script>
+function updateCodecList () {
+    var codecs = document.querySelectorAll('.codec');
+    var audio = document.createElement('audio');
+    for (var i in codecs) {
+        var codecEl = codecs[i];
+        // weird
+        if (!codecEl.dataset) continue;
+        codecEl.textContent = audio.canPlayType(codecEl.dataset.codec) || 'no';
+    }
+}
+updateCodecList();
+
+</script>
+<p>"Maybe" and "probably" are indeed what it says... There is no guarantee it can or can't play that type. Although you can assume that "probably" means the codec is playable. See the <a href="https://developer.mozilla.org/en-US/docs/HTML/Supported_media_formats#Browser_compatibility">full list of supported codecs</a>.</p>
+
+<p>A more important issue is that of gapless playback. This application <strong>requires</strong> gapless playback otherwise the results might be inaccurate. While gapless playback is practically universally supported for the WAV file format, this hasn't been implemented for most codecs. See Chrome bug <a href="https://code.google.com/p/chromium/issues/detail?id=135291">#135291</a> and Firefox bugs <a href="https://bugzilla.mozilla.org/show_bug.cgi?id=1129355">#1129355</a> and <a href="https://bugzilla.mozilla.org/show_bug.cgi?id=1130611">#1130611</a>.</p>
+
+<p>Note: Chrome supports Opus playback, but does not yet support Opus in the Web Audio API. See bug <a href="https://code.google.com/p/chromium/issues/detail?id=409402">#409402</a>.</p>
+
+</details>
+
+
+</body>
+</html>

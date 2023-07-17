@@ -1,0 +1,151 @@
+#!/usr/bin/python3
+
+import sys, os
+import glob
+import subprocess
+import json
+import base64
+import re
+
+#VERIFY_DATA_INTERVAL = 20000
+
+#def generateVerifyData(path, samples, channels):
+#    rawpath = path + '.wav'
+#    subprocess.call(['ffmpeg', '-v', 'quiet', '-i', path, '-ar', '48000', '-f', 'f32le', '-acodec', 'pcm_f32le', '-y', rawpath])
+#    f = open(rawpath, 'rb')
+#    verifySamples = min(int(samples/VERIFY_DATA_INTERVAL), 24)
+#    verifyDataBuf = bytearray(verifySamples*4)
+#    for i in range(verifySamples):
+#        buf = f.read(VERIFY_DATA_INTERVAL*channels)
+#        offset = 0 # (i % channels) * 4
+#        verifyDataBuf[i*4+0] = buf[offset+0]
+#        verifyDataBuf[i*4+1] = buf[offset+1]
+#        verifyDataBuf[i*4+2] = buf[offset+2]
+#        verifyDataBuf[i*4+3] = buf[offset+3]
+#    f.close()
+#    os.remove(rawpath)
+#    return base64.b64encode(verifyDataBuf).decode('ascii')
+
+def generateSamples(samplesDir, olddata):
+    data = {}
+    wavpaths = glob.glob(samplesDir+'/*.wav')
+    wavpaths.sort()
+    for wavpath in wavpaths:
+        path = os.path.splitext(wavpath)[0]
+        name = os.path.basename(path)
+
+        if name.endswith('.opus') or name.endswith('.m4a'):
+            continue
+
+        oldwavdata = olddata.get(name, {'original': {}})['original']
+        if 'samples' in oldwavdata and 'rawsize' in oldwavdata and 'channels' in oldwavdata:
+            samples = oldwavdata['samples']
+            rawsize = oldwavdata['rawsize']
+            channels = oldwavdata['channels']
+        else:
+            p = subprocess.Popen(['ffprobe', '-v', 'quiet', '-print_format', 'json', '-show_streams', wavpath],
+                                    stdout=subprocess.PIPE)
+            wavdata = json.loads(p.stdout.read().decode('utf-8'))
+            if wavdata['streams'][0]['bits_per_sample'] != 16:
+                pass # TODO
+                #raise ValueError('bits_per_sample must be 16')
+            samples = wavdata['streams'][0]['duration_ts']
+            channels = wavdata['streams'][0]['channels']
+            # rawsize = samples * channels * 2 bytes (16 bit)
+            rawsize = samples * channels * 2
+
+        data[name] = {
+            'original': {
+                'name': name + '.wav',
+                'samples': samples,
+                'filesize': os.path.getsize(wavpath),
+                'rawsize': rawsize,
+                'channels': channels,
+            },
+            'encoded': {
+            },
+        }
+
+        data[name]['encoded']['Opus'] = {}
+        for bitrate in [10, 20, 30, 35, 40, 45, 50, 55, 60, 70, 80, 90]:
+            outext = '.%d.opus' % bitrate
+            outencpath = path + outext
+            outwavpath = outencpath + '.wav'
+            if not os.path.isfile(outencpath):
+                if subprocess.call(['opusenc', '--bitrate', str(bitrate), wavpath, outencpath]):
+                    return
+                if os.path.isfile(outwavpath):
+                    os.remove(outwavpath)
+            if not os.path.isfile(outwavpath):
+                if subprocess.call(['opusdec', outencpath, outwavpath]):
+                    return
+            #oldsampledata = olddata.get(name, {'encoded': {}})['encoded'].get('Opus', {}).get(bitrate, {})
+            #rawsize = oldsampledata.get('rawsize', None)
+            #if rawsize is None:
+            #    output = subprocess.check_output(['opusinfo', outpath])
+            #    for line in output.splitlines():
+            #        if line.startswith('\tTotal data length: '):
+            #            line = line[len('\tTotal data length: '):]
+            #            if line.find('bytes') <= 0:
+            #                raise ValueError('unexpected output')
+            #            rawsize = int(line[:line.find(' bytes')].strip())
+            #    if rawsize is None:
+            #        raise ValueError('could not get raw filesize')
+            #verifyData = oldsampledata.get('verifyData', None)
+            #if verifyData is None:
+            #    verifyData = generateVerifyData(outpath, samples, channels)
+            data[name]['encoded']['Opus'][bitrate] = {
+                'name': name + outext + '.wav',
+                'samples': samples,
+                'filesize': os.path.getsize(outencpath),
+                #'rawsize': rawsize,
+                #'verifyData': verifyData,
+            }
+
+        data[name]['encoded']['AAC'] = {}
+        for bitrate in [10, 20, 30, 35, 40, 45, 50, 55, 60, 70, 80, 90]:
+            outext = '.%d.m4a' % bitrate
+            outencpath = path + outext
+            outwavpath = outencpath + '.wav'
+            if not os.path.isfile(outencpath):
+                if subprocess.call(['neroAacEnc', '-2pass', '-br', str(bitrate*1000), '-if', wavpath, '-of', outencpath]):
+                    return
+                if os.path.isfile(outwavpath):
+                    os.remove(outwavpath)
+            if not os.path.isfile(outwavpath):
+                if subprocess.call(['neroAacDec', '-if', outencpath, '-of', outwavpath]):
+                    return
+            #oldsampledata = olddata.get(name, {'encoded': {}})['encoded'].get('AAC', {}).get(str(bitrate), {})
+            #rawsize = oldsampledata.get('rawsize', None)
+            #if rawsize is None:
+            #    rawpath = path + '.%d.aac' % bitrate
+            #    subprocess.call(['ffmpeg', '-v', 'quiet', '-i', outpath, '-codec', 'copy', '-y', rawpath])
+            #    rawsize = os.path.getsize(rawpath)
+            #    os.remove(rawpath)
+            #verifyData = oldsampledata.get('verifyData', None)
+            #if verifyData is None:
+            #    verifyData = generateVerifyData(outpath, samples, channels)
+            data[name]['encoded']['AAC'][bitrate] = {
+                'name': name + outext + '.wav',
+                'samples': samples,
+                'filesize': os.path.getsize(outwavpath),
+                'rawsize': rawsize,
+                #'verifyData': verifyData,
+            }
+
+    return data
+
+if __name__ == '__main__':
+    samplesDir = os.path.normpath(os.path.dirname(os.path.realpath(__file__)) + '/samples')
+    indexpath = os.path.join(samplesDir, 'index.json')
+
+    oldIndex = {}
+    if os.path.exists(indexpath):
+        oldIndex = json.load(open(indexpath))
+
+    if oldIndex is None:
+        oldIndex = {}
+
+    index = generateSamples(samplesDir, oldIndex)
+    json.dump(index, open(os.path.join(samplesDir, 'index.json'), 'w'))
+
